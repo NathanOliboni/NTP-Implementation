@@ -55,7 +55,6 @@ def sincronizarNTP(server="pool.ntp.org", port=123):
     except Exception as e:
         print(f"Erro ao sincronizar com NTP: {e}")
 
-
 def criarRespostaNTP(originate_timestamp, client_address, sock):
     """Cria e envia uma resposta NTP ao cliente."""
     global OFFSET
@@ -126,7 +125,6 @@ def servidorNTP(host="0.0.0.0", port=123):
                 break
             except Exception as e:
                 print(f"Erro no servidor: {e}")
-
 
 if __name__ == "__main__":
     servidorNTP()
