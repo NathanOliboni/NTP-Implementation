@@ -54,8 +54,12 @@ def calcularHMACHex(message, key):
 
 def criarPacoteComAutenticacao(ntp_packet, key):
     """Cria o pacote NTP com HMAC."""
-    mac_address = obterEnderecoMAC()                                        # Obter o endereço MAC para usar como Key Identifier
-    key_id = int(mac_address.replace(":", ""), 16)                          # Converter MAC para inteiro
+    # Obtém os últimos 4 bytes do endereço MAC
+    mac_address = obterEnderecoMAC()
+    mac_hex = mac_address.replace(":", "").replace("-", "")  # Remove separadores
+    mac_int = int(mac_hex, 16)  # Converte para inteiro de 48 bits
+    key_id = mac_int & 0xFFFFFFFF  # Pega apenas os últimos 4 bytes (32 bits)
+    # Agora key_id estará dentro do intervalo permitido para struct.pack("!I", key_id)
     key_identifier = struct.pack("!I", key_id)
     hmac_value = calcularHMACHex(ntp_packet, key)                           # Calcular o HMAC da mensagem
     return ntp_packet + key_identifier + hmac_value
