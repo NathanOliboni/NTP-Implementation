@@ -1,0 +1,10 @@
+# Servidor (como administrador)
+set NTP_SECRET_KEY=sua_chave_secreta
+python servidorNTP.py
+
+# Cliente padrão
+python clienteNTP.py --server pool.ntp.org
+
+# Cliente autenticado
+set NTP_SECRET_KEY=sua_chave_secreta
+python clienteNTP.py --server localhost --auth

@@ -2,129 +2,127 @@ import socket
 import struct
 import time
 import threading
+import hmac
+import hashlib
+import os
 
-'''
-Ponto para observar depois, há um problema de sincronização, por exemplo, se o horário do servidor for adiantado ou atrasado, 
-o cliente não conseguirá se sincronizar com o servidor, pois o horário do servidor é o horário de referência para o cliente, 
-fazendo com que o cliente não fique com o horário correto.
-'''
+NTP_EPOCH = 2208988800
+OFFSET = 0.0
+MAX_OFFSET_ADJUST = 1.0
+SYNC_INTERVAL = 1.0 
 
-NTP_EPOCH = 2208988800                                              # 1 de janeiro de 1900
-OFFSET = 0                                                          # Offset inicial, será ajustado pela sincronização
-MAX_OFFSET_ADJUST = 5                                               # Máximo ajuste permitido em segundos
-SYNC_INTERVAL = 3                                                   # Intervalo de sincronização em segundos
+SHARED_SECRET = os.environ.get("NTP_SECRET_KEY", "").encode()
+if not SHARED_SECRET:
+    raise ValueError("Defina NTP_SECRET_KEY no ambiente.")
 
+def calcularHMAC(message):
+    return hmac.new(SHARED_SECRET, message, hashlib.sha256).digest()
+
+def validarAutenticacao(data):
+    if len(data) not in [48, 84]:
+        return False
+    if len(data) == 48:
+        return True
+    
+    ntp_packet = data[:48]
+    received_hmac = data[52:84]
+    return hmac.compare_digest(calcularHMAC(ntp_packet), received_hmac)
 
 def sincronizarNTP(server="pool.ntp.org", port=123):
-    """Sincroniza com um servidor NTP confiável e ajusta o offset global."""
     global OFFSET
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.settimeout(5)
-            li_vn_mode = (0 << 6) | (4 << 3) | 3                    # LI = 0, Version = 4, Mode = 3 (Client mode)
+            li_vn_mode = (0 << 6) | (4 << 3) | 3
+            t1_unix = time.time()
+            originate = int((t1_unix + NTP_EPOCH) * (2**32))
+            
             request_packet = struct.pack(
                 "!BBBbIIIQQQQ",
                 li_vn_mode,
-                0, 0, 0,                                            # stratum, poll, precision
-                0, 0, 0,                                            # root_delay, root_dispersion, reference_id
-                0, 0, 0,                                            # reference, originate, receive timestamps
-                int((time.time() + NTP_EPOCH) * (2**32))            # transmit timestamp
+                0, 0, 0,
+                0, 0, 0,
+                0, 0, 0,
+                originate
             )
+            
             sock.sendto(request_packet, (server, port))
             response, _ = sock.recvfrom(1024)
+            t4_unix = time.time()
+
             response_data = struct.unpack("!BBBbIIIQQQQ", response[:48])
-
-                                                                    # Timestamps da resposta
-            t1 = struct.unpack("!Q", request_packet[40:48])[0]      # Originate timestamp
-            t2 = response_data[9]                                   # Receive timestamp
-            t3 = response_data[10]                                  # Transmit timestamp
-            t4 = int((time.time() + NTP_EPOCH) * (2**32))           # Destination timestamp
-
-            # Calcular offset
-            novo_offset = ((t2 - t1) + (t3 - t4)) / 2.0 / (2**32)
-
-            # Ajustar gradualmente o offset
-            desvio = abs(novo_offset - OFFSET)
-            if desvio > MAX_OFFSET_ADJUST:
-                print(f"Ajuste grande detectado ({desvio:.6f}s). Aplicando correção gradual.")
-                OFFSET += (novo_offset - OFFSET) / 2
+            t2_ntp = response_data[8]
+            t3_ntp = response_data[10]
+            
+            t2_unix = (t2_ntp / (2**32)) - NTP_EPOCH
+            t3_unix = (t3_ntp / (2**32)) - NTP_EPOCH
+            
+            novo_offset = ((t2_unix - t1_unix) + (t3_unix - t4_unix)) / 2
+            
+            if abs(novo_offset) > MAX_OFFSET_ADJUST:
+                OFFSET += novo_offset * 0.5
             else:
                 OFFSET = novo_offset
-
-            print(f"Offset atualizado: {OFFSET:.6f} segundos")
+            
+            print(f"[Sincronização] Offset atualizado: {OFFSET:.6f}s")
     except Exception as e:
-        print(f"Erro ao sincronizar com NTP: {e}")
+        print(f"[Sincronização] Erro: {str(e)}")
 
-def criarRespostaNTP(originate_timestamp, client_address, sock):
-    """Cria e envia uma resposta NTP ao cliente."""
-    global OFFSET
+def criarRespostaNTP(originate_timestamp, client_address, sock, autenticar=False):
     current_time = time.time() + OFFSET
-
-    receive_timestamp = int((current_time + NTP_EPOCH) * (2**32))   # T2 ajustado
-    transmit_timestamp = int((current_time + NTP_EPOCH) * (2**32))  # T3 ajustado
-
-    li_vn_mode = (0 << 6) | (4 << 3) | 4                            # LI = 0, Version = 4, Mode = 4 (Server mode)
-    stratum = 1
-    poll = 0
-    precision = -20
-    root_delay = 0
-    root_dispersion = 0
-    reference_id = 0x4C4F434C                                       # "LOCL"
-    reference_timestamp = int((current_time + NTP_EPOCH) * (2**32)) # Horário de referência ajustado
-
-    resposta = struct.pack(
+    ntp_time = int((current_time + NTP_EPOCH) * (2**32))
+    
+    resposta_ntp = struct.pack(
         "!BBBbIIIQQQQ",
-        li_vn_mode,
-        stratum,
-        poll,
-        precision,
-        root_delay,
-        root_dispersion,
-        reference_id,
-        reference_timestamp,
-        originate_timestamp,
-        receive_timestamp,
-        transmit_timestamp
+        (0 << 6) | (4 << 3) | 4,  # LI=0, VN=4, Mode=4
+        1, 0, -20,  # Stratum=1, Poll=0, Precision=-20
+        0, 0, 0x4C4F434C,  # Root delay, dispersion, ID
+        ntp_time,  # Reference
+        originate_timestamp,  # Originate
+        ntp_time,  # Receive
+        ntp_time  # Transmit
     )
-
-    sock.sendto(resposta, client_address)
-    print(f"Resposta enviada para {client_address}")
-
+    
+    if autenticar:
+        resposta_completa = resposta_ntp + struct.pack("!I", 0) + calcularHMAC(resposta_ntp)
+    else:
+        resposta_completa = resposta_ntp
+    
+    sock.sendto(resposta_completa, client_address)
+    print(f"Resposta para {client_address} (Auth: {autenticar})")
 
 def processarCliente(data, client_address, sock):
-    """Processa pacotes NTP recebidos de clientes."""
     try:
-        pacote = struct.unpack("!BBBbIIIQQQQ", data[:48])
-        originate_timestamp = pacote[8]
-        criarRespostaNTP(originate_timestamp, client_address, sock)
-    except Exception as e:
-        print(f"Erro ao processar pacote de {client_address}: {e}")
+        print(f"📥 Pacote recebido de {client_address} | Tamanho: {len(data)} bytes")
+        if not validarAutenticacao(data):
+            print(f"Pacote inválido de {client_address}")
+            return
 
+        autenticar = len(data) == 84
+        pacote = struct.unpack("!BBBbIIIQQQQ", data[:48])
+        criarRespostaNTP(pacote[8], client_address, sock, autenticar)
+    except Exception as e:
+        print(f"Erro no processamento: {str(e)}")
 
 def servidorNTP(host="0.0.0.0", port=123):
-    """Inicia o servidor NTP."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.bind((host, port))
-        print(f"Servidor NTP iniciado em {host}:{port}")
-
-                                                                    # Thread para sincronização periódica
-        def atualizar_offset():
+        print(f"🕒 Servidor NTP em {host}:{port}")
+        
+        def sincronizador():
             while True:
                 sincronizarNTP()
-                time.sleep(SYNC_INTERVAL)                           # Sincroniza a cada SYNC_INTERVAL segundos
-
-        threading.Thread(target=atualizar_offset, daemon=True).start()
-
+                time.sleep(SYNC_INTERVAL)
+        
+        threading.Thread(target=sincronizador, daemon=True).start()
+        
         while True:
             try:
-                data, client_address = sock.recvfrom(1024)
-                print(f"Pacote recebido de {client_address}")
-                threading.Thread(target=processarCliente, args=(data, client_address, sock)).start()
+                data, addr = sock.recvfrom(1024)
+                threading.Thread(target=processarCliente, args=(data, addr, sock)).start()
             except KeyboardInterrupt:
-                print("Servidor encerrado.")
+                print("\n⏹ Servidor encerrado")
                 break
-            except Exception as e:
-                print(f"Erro no servidor: {e}")
 
 if __name__ == "__main__":
     servidorNTP()
