@@ -5,6 +5,8 @@ import threading
 import hmac
 import hashlib
 import os
+import sys
+
 
 NTP_EPOCH = 2208988800
 OFFSET = 0.0
@@ -27,6 +29,32 @@ def validarAutenticacao(data):
     ntp_packet = data[:48]
     received_hmac = data[52:84]
     return hmac.compare_digest(calcularHMAC(ntp_packet), received_hmac)
+
+def ajustarTempoDoSistema(offset_seconds):
+    current_time = time.time()                                              # Obter o tempo atual
+    adjusted_time = current_time + offset_seconds                           # Ajustar o tempo com base no offset
+    formatted_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(adjusted_time))
+    print(f"Ajustando o relógio para: {formatted_time}")                    
+    try:                                                                    # Ajustar o relógio do sistema (precisa de permissões de administrador)
+        if os.name == "nt":  # Windows
+            import ctypes
+            from datetime import datetime
+
+            dt = datetime.fromtimestamp(adjusted_time)
+            ctypes.windll.kernel32.SetSystemTime(
+                ctypes.c_uint(dt.year),
+                ctypes.c_uint(dt.month),
+                ctypes.c_uint(0),  # Dia da semana (opcional, ajustado automaticamente)
+                ctypes.c_uint(dt.day),
+                ctypes.c_uint(dt.hour),
+                ctypes.c_uint(dt.minute),
+                ctypes.c_uint(dt.second),
+                ctypes.c_uint(0)  # Milissegundos
+            )
+        else:  # Unix/Linux/MacOS
+            os.system(f"sudo date -s '{formatted_time}'")
+    except Exception as e:
+        print(f"Erro ao ajustar o relógio: {e}")
 
 def sincronizarNTP(server="pool.ntp.org", port=123):
     global OFFSET
@@ -58,15 +86,23 @@ def sincronizarNTP(server="pool.ntp.org", port=123):
             t3_unix = (t3_ntp / (2**32)) - NTP_EPOCH
             
             novo_offset = ((t2_unix - t1_unix) + (t3_unix - t4_unix)) / 2
-            
-            if abs(novo_offset) > MAX_OFFSET_ADJUST:
-                OFFSET += novo_offset * 0.5
-            else:
-                OFFSET = novo_offset
+            OFFSET = novo_offset
             
             print(f"[Sincronização] Offset atualizado: {OFFSET:.6f}s")
+
+            # Se a diferença de tempo for maior que 1 hora, ajuste direto para o tempo do NTP
+            if abs(OFFSET) > 25:
+                print("[Sincronização] Desvio muito grande, ajustando imediatamente...")
+                ajustarTempoDoSistema(t3_unix - time.time())  # Ajusta para o tempo correto
+                print("[Sincronização] Tempo ajustado. Reiniciando servidor...")
+                
+                # Reinicia o próprio script
+                python = sys.executable
+                os.execl(python, python, *sys.argv)
+
     except Exception as e:
         print(f"[Sincronização] Erro: {str(e)}")
+
 
 def criarRespostaNTP(originate_timestamp, client_address, sock, autenticar=False):
     current_time = time.time() + OFFSET
@@ -93,7 +129,7 @@ def criarRespostaNTP(originate_timestamp, client_address, sock, autenticar=False
 
 def processarCliente(data, client_address, sock):
     try:
-        print(f"📥 Pacote recebido de {client_address} | Tamanho: {len(data)} bytes")
+        print(f"Pacote recebido de {client_address} | Tamanho: {len(data)} bytes")
         if not validarAutenticacao(data):
             print(f"Pacote inválido de {client_address}")
             return
@@ -107,7 +143,7 @@ def processarCliente(data, client_address, sock):
 def servidorNTP(host="0.0.0.0", port=123):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.bind((host, port))
-        print(f"🕒 Servidor NTP em {host}:{port}")
+        print(f"Servidor NTP em {host}:{port}")
         
         def sincronizador():
             while True:
@@ -121,7 +157,7 @@ def servidorNTP(host="0.0.0.0", port=123):
                 data, addr = sock.recvfrom(1024)
                 threading.Thread(target=processarCliente, args=(data, addr, sock)).start()
             except KeyboardInterrupt:
-                print("\n⏹ Servidor encerrado")
+                print("\nServidor encerrado")
                 break
 
 if __name__ == "__main__":

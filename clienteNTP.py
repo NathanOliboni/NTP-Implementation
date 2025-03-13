@@ -5,6 +5,7 @@ import argparse
 import hmac
 import hashlib
 import os
+import sys
 
 NTP_EPOCH = 2208988800
 
@@ -30,6 +31,33 @@ def validarResposta(data):
         hmac.new(SHARED_SECRET, data[:48], hashlib.sha256).digest(),
         data[52:84]
     )
+    
+def ajustarTempoDoSistema(offset_seconds):
+    current_time = time.time()                                              # Obter o tempo atual
+    adjusted_time = current_time + offset_seconds                           # Ajustar o tempo com base no offset
+    formatted_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(adjusted_time))
+    print(f"Ajustando o relógio para: {formatted_time}")                    
+    try:                                                                    # Ajustar o relógio do sistema (precisa de permissões de administrador)
+        if os.name == "nt":  # Windows
+            import ctypes
+            from datetime import datetime
+
+            dt = datetime.fromtimestamp(adjusted_time)
+            ctypes.windll.kernel32.SetSystemTime(
+                ctypes.c_uint(dt.year),
+                ctypes.c_uint(dt.month),
+                ctypes.c_uint(0),  # Dia da semana (opcional, ajustado automaticamente)
+                ctypes.c_uint(dt.day),
+                ctypes.c_uint(dt.hour),
+                ctypes.c_uint(dt.minute),
+                ctypes.c_uint(dt.second),
+                ctypes.c_uint(0)  # Milissegundos
+            )
+        else:  # Unix/Linux/MacOS
+            os.system(f"sudo date -s '{formatted_time}'")
+    except Exception as e:
+        print(f"Erro ao ajustar o relógio: {e}")
+
 
 def executarCliente(server, port, usar_autenticacao):
     pacote_ntp, t1_ntp = criarPacoteNTP()
@@ -44,7 +72,7 @@ def executarCliente(server, port, usar_autenticacao):
             t4_unix = time.time()
             
             if usar_autenticacao and not validarResposta(data):
-                print("❌ Autenticação falhou!")
+                print("Autenticação falhou!")
                 return
 
             unpacked = struct.unpack("!BBBbIIIQQQQ", data.ljust(48, b'\x00')[:48])
@@ -58,14 +86,15 @@ def executarCliente(server, port, usar_autenticacao):
             
             offset = ((t2_unix - t1_unix) + (t3_unix - t4_unix)) / 2
             
-            if abs(offset) > 3600:
-                print(f"⚠ Offset inválido: {offset}")
+            if abs(offset) > 25:
+                print("Ajustando tempo do sistema")
+                ajustarTempoDoSistema(offset)
                 return
             
-            print(f"⏱ Offset: {offset:.6f}s | Hora: {time.ctime(time.time() + offset)}")
+            print(f"Offset: {offset:.6f}s | Hora: {time.ctime(time.time() + offset)}")
             
         except socket.timeout:
-            print("⌛ Timeout: Sem resposta")
+            print("Timeout: Sem resposta")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Cliente NTP")
@@ -75,7 +104,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     if args.auth and not SHARED_SECRET:
-        print("❌ Chave secreta não configurada!")
+        print("Chave secreta não configurada!")
         exit(1)
         
     executarCliente(args.server, args.port, args.auth)

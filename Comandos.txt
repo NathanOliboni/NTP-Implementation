@@ -1,10 +1,13 @@
 # Servidor (como administrador)
-set NTP_SECRET_KEY=sua_chave_secreta
+set NTP_SECRET_KEY=sua_chave_secreta --> para windows
+export NTP_SECRET_KEY=sua_chave_secreta --> para linux
 python servidorNTP.py
 
 # Cliente padrão
 python clienteNTP.py --server pool.ntp.org
 
 # Cliente autenticado
-set NTP_SECRET_KEY=sua_chave_secreta
+set NTP_SECRET_KEY=sua_chave_secreta --> para windows
+export NTP_SECRET_KEY=sua_chave_secreta --> para linux
+
 python clienteNTP.py --server localhost --auth
