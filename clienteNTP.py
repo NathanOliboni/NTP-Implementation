@@ -11,6 +11,7 @@ NTP_EPOCH = 2208988800
 
 SHARED_SECRET = os.environ.get("NTP_SECRET_KEY", "").encode()
 
+
 def criarPacoteNTP():
     li_vn_mode = (0 << 6) | (4 << 3) | 3
     originate = int((time.time() + NTP_EPOCH) * (2**32))
@@ -24,12 +25,12 @@ def criarPacoteNTP():
     ), originate
 
 def criarPacoteAutenticado(pacote_ntp):
-    return pacote_ntp + struct.pack("!I", 0) + hmac.new(SHARED_SECRET, pacote_ntp, hashlib.sha256).digest()
+    return pacote_ntp + hmac.new(SHARED_SECRET, pacote_ntp, hashlib.sha256).digest()
 
 def validarResposta(data):
     return hmac.compare_digest(
         hmac.new(SHARED_SECRET, data[:48], hashlib.sha256).digest(),
-        data[52:84]
+        data[48:80]
     )
     
 def ajustarTempoDoSistema(offset_seconds):
