@@ -5,7 +5,7 @@ import threading
 import hmac
 import hashlib
 import os
-import sys
+import sys 
 
 
 NTP_EPOCH = 2208988800
@@ -21,13 +21,13 @@ def calcularHMAC(message):
     return hmac.new(SHARED_SECRET, message, hashlib.sha256).digest()
 
 def validarAutenticacao(data):
-    if len(data) not in [48, 84]:
+    if len(data) not in [48, 80]:
         return False
     if len(data) == 48:
         return True
     
     ntp_packet = data[:48]
-    received_hmac = data[52:84]
+    received_hmac = data[48:80]
     return hmac.compare_digest(calcularHMAC(ntp_packet), received_hmac)
 
 def ajustarTempoDoSistema(offset_seconds):
@@ -104,7 +104,7 @@ def sincronizarNTP(server="pool.ntp.org", port=123):
         print(f"[Sincronização] Erro: {str(e)}")
 
 
-def criarRespostaNTP(originate_timestamp, client_address, sock, autenticar=False):
+def criarRespostaNTP(originate_timestamp, client_address, sock, autenticar):
     current_time = time.time() + OFFSET
     ntp_time = int((current_time + NTP_EPOCH) * (2**32))
     
@@ -120,7 +120,7 @@ def criarRespostaNTP(originate_timestamp, client_address, sock, autenticar=False
     )
     
     if autenticar:
-        resposta_completa = resposta_ntp + struct.pack("!I", 0) + calcularHMAC(resposta_ntp)
+        resposta_completa = resposta_ntp + calcularHMAC(resposta_ntp)
     else:
         resposta_completa = resposta_ntp
     
@@ -134,17 +134,17 @@ def processarCliente(data, client_address, sock):
             print(f"Pacote inválido de {client_address}")
             return
 
-        autenticar = len(data) == 84
+        autenticar = validarAutenticacao(data)
         pacote = struct.unpack("!BBBbIIIQQQQ", data[:48])
         criarRespostaNTP(pacote[8], client_address, sock, autenticar)
     except Exception as e:
         print(f"Erro no processamento: {str(e)}")
 
-def servidorNTP(host="0.0.0.0", port=123):
+def servidorNTP(host="10.81.176.132", port=123):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.bind((host, port))
         print(f"Servidor NTP em {host}:{port}")
-        
+
         def sincronizador():
             while True:
                 sincronizarNTP()
